@@ -8,7 +8,8 @@ import streamlit as st
 APP = Path(__file__).parent
 OUT = APP / 'output'
 OUT.mkdir(exist_ok=True)
-HORDE = 'https://stablehorde.net/api'
+HORDE = 'https://aihorde.net/api'
+HORDE_OAI = 'https://oai.aihorde.net/v1'
 ANON_KEY = '0000000000'
 
 st.set_page_config(page_title='Indian History Reel Studio — Free', page_icon='🎬', layout='wide')
@@ -24,37 +25,73 @@ Visual continuity is mandatory: recurring character identity, age, physique, cos
 Every image must be numbered and synchronized to exact narration time ranges.'''
 
 
-def horde_post(path, payload):
-    r = requests.post(HORDE + path, json=payload, headers={
-        'apikey': ANON_KEY,
-        'Client-Agent': 'IndianHistoryReelStudio:1.0'
-    }, timeout=60)
-    r.raise_for_status()
+def horde_post(path, payload, timeout=90):
+    """Call the current AI Horde REST API with the anonymous free key."""
+    r = requests.post(
+        HORDE + path,
+        json=payload,
+        headers={
+            'apikey': ANON_KEY,
+            'Client-Agent': 'IndianHistoryReelStudio:1.2',
+            'Accept': 'application/json',
+        },
+        timeout=timeout,
+    )
+    if not r.ok:
+        detail = r.text[:1200]
+        raise requests.HTTPError(f'AI Horde HTTP {r.status_code}: {detail}', response=r)
     return r.json()
 
 
-def horde_text(prompt, max_wait=240):
+def oai_models():
+    r = requests.get(
+        HORDE_OAI + '/models',
+        headers={'Authorization': f'Bearer {ANON_KEY}', 'Client-Agent': 'IndianHistoryReelStudio:1.2'},
+        timeout=30,
+    )
+    if not r.ok:
+        raise requests.HTTPError(f'AI Horde OpenAI proxy HTTP {r.status_code}: {r.text[:800]}', response=r)
+    data = r.json()
+    ids = [m.get('id') for m in data.get('data', []) if m.get('id')]
+    if not ids:
+        raise RuntimeError('AI Horde OpenAI proxy returned no text models.')
+    return ids
+
+
+def horde_text(prompt, max_wait=300):
+    """Use the official AI Horde OpenAI-compatible proxy for text.
+    It supports the anonymous key at lowest priority, avoiding the failing direct
+    text endpoint used by the previous free build.
+    """
+    models = oai_models()
+    model = models[0]
     payload = {
-        'prompt': prompt,
-        'params': {
-            'max_length': 2200,
-            'max_context_length': 8192,
-            'temperature': 0.35,
-            'top_p': 0.9,
-        },
-        'trusted_workers': True,
-        'nsfw': False,
-        'models': []
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'You are a careful historical research and storytelling assistant. Follow the user output format exactly.'},
+            {'role': 'user', 'content': prompt},
+        ],
+        'temperature': 0.25,
+        'max_tokens': 1800,
     }
-    job = horde_post('/v2/generate/text/async', payload)
-    jid = job['id']
-    started = time.time()
-    while time.time() - started < max_wait:
-        s = requests.get(HORDE + f'/v2/generate/text/status/{jid}', headers={'Client-Agent':'IndianHistoryReelStudio:1.0'}, timeout=30).json()
-        if s.get('done') and s.get('generations'):
-            return s['generations'][0]['text']
-        time.sleep(4)
-    raise TimeoutError('Free text generation queue took too long. Please retry.')
+    r = requests.post(
+        HORDE_OAI + '/chat/completions',
+        json=payload,
+        headers={
+            'Authorization': f'Bearer {ANON_KEY}',
+            'Content-Type': 'application/json',
+            'Client-Agent': 'IndianHistoryReelStudio:1.2',
+        },
+        timeout=120,
+    )
+    if not r.ok:
+        detail = r.text[:1400]
+        raise requests.HTTPError(f'AI Horde text proxy HTTP {r.status_code}: {detail}', response=r)
+    data = r.json()
+    choices = data.get('choices') or []
+    if not choices:
+        raise RuntimeError(f'AI Horde text proxy returned no choices: {str(data)[:1000]}')
+    return choices[0]['message']['content']
 
 
 def horde_image(prompt, out_file, max_wait=600):
@@ -70,19 +107,28 @@ def horde_image(prompt, out_file, max_wait=600):
         },
         'nsfw': False,
         'trusted_workers': True,
-        'models': []
+        # Let the next available compatible model fulfill the request.
     }
     job = horde_post('/v2/generate/async', payload)
     jid = job['id']
     started = time.time()
     while time.time() - started < max_wait:
-        s = requests.get(HORDE + f'/v2/generate/status/{jid}', headers={'Client-Agent':'IndianHistoryReelStudio:1.0'}, timeout=30).json()
+        sr = requests.get(
+            HORDE + f'/v2/generate/status/{jid}',
+            headers={'apikey': ANON_KEY, 'Client-Agent':'IndianHistoryReelStudio:1.2'},
+            timeout=30,
+        )
+        if not sr.ok:
+            time.sleep(5)
+            continue
+        s = sr.json()
         if s.get('done') and s.get('generations'):
             img = s['generations'][0].get('img')
             if not img:
                 raise RuntimeError('Free image service returned no image URL.')
-            raw = requests.get(img, timeout=120).content
-            out_file.write_bytes(raw)
+            rawr = requests.get(img, timeout=120)
+            rawr.raise_for_status()
+            out_file.write_bytes(rawr.content)
             return
         time.sleep(5)
     raise TimeoutError('Free image generation queue took too long. Retry this image.')
@@ -145,14 +191,16 @@ def extract_json(text):
         return json.loads(m.group(0))
 
 
-def call_agent(prompt, attempts=2):
+def call_agent(prompt, attempts=3):
     last = None
-    for _ in range(attempts):
+    for i in range(attempts):
         try:
             return horde_text(SYSTEM + '\n\n' + prompt)
         except Exception as e:
             last = e
-    raise last
+            if i < attempts - 1:
+                time.sleep(3 * (i + 1))
+    raise RuntimeError(f'Free text generation failed after {attempts} attempts. {last}')
 
 
 def research(topic, supplied_sources):
@@ -292,7 +340,12 @@ if go:
     (project/'audio').mkdir(exist_ok=True)
     with st.status('Generating free reel...', expanded=True) as stx:
         st.write('1/5 Researching public sources...')
-        kb = research(topic, supplied)
+        try:
+            kb = research(topic, supplied)
+        except Exception as e:
+            st.error(f'Free research/AI text service is temporarily unavailable. {e}')
+            st.info('AI Horde is volunteer-powered and anonymous requests have the lowest priority. You can also register a free AI Horde account for higher priority; no payment is required.')
+            st.stop()
         st.write('2/5 Creating Telugu narration...')
         story = create_story(kb, duration, style)
         st.write('3/5 Building Visual Bible...')

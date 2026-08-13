@@ -1,44 +1,13 @@
-# Indian History Reel Studio — FREE Mode
+# Indian History Reel Studio — FREE v2
 
-A zero-OpenAI-cost starter for the Master Indian History Reel workflow.
+This version keeps the no-payment workflow and updates the text-generation layer to the current AI Horde OpenAI-compatible proxy. The proxy documents anonymous access with key `0000000000` at lowest priority. AI Horde is volunteer-powered and free to use, though anonymous jobs can be slower or restricted under load.
 
-## Important trade-off
-
-This version does **not** use the OpenAI API and does not require an API key. It uses public Wikipedia/Wikimedia API retrieval, AI Horde for community-powered free text/image generation, and optional `edge-tts` for Telugu narration. Free services can be queued, rate-limited, or change availability. Research quality is therefore not equivalent to a paid multi-source research stack.
-
-For stricter historical fact-checking, paste source URLs or source notes into the app's source/evidence box and review the generated research report before publishing.
-
-AI image consistency is enforced through a project Visual Bible and continuity prompts, but no free image service can guarantee pixel-perfect recurring faces across independent generations.
-
-## Run
-
-Python 3.11+ recommended.
-
-```bash
-python -m venv .venv
-# Windows
-.venv\\Scripts\\activate
-# macOS/Linux
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-No API key is required.
+It also uses the current AI Horde REST base for image generation, public Wikipedia/Wikimedia retrieval with retries, and optional Telugu TTS through `edge-tts`.
 
 ## Deploy
+Upload `app.py`, `requirements.txt`, and this README to the GitHub repository, then let Streamlit Cloud redeploy.
 
-This can be deployed to Streamlit Community Cloud. Because this free version has no secret key, you can keep deployment simple. Be aware that public cloud environments may have storage/session limits, and AI Horde jobs may be slow.
+## No OpenAI API key is required.
 
-## Output
-
-Each project contains:
-- research.json
-- story.json
-- visual_bible.json
-- scenes.json
-- voiceover_telugu.txt
-- subtitles.srt
-- editing_timeline.csv
-- images/IMAGE_01.png ...
-- audio/voiceover_te-IN-ShrutiNeural.mp3 when TTS succeeds
+## Privacy
+Do not put private/sensitive material into AI Horde prompts; AI Horde documentation notes that worker operators may technically be able to see prompts/generations. Treat requests as public-forum-like.
