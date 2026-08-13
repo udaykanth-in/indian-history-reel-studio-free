@@ -11,3 +11,9 @@ Upload `app.py`, `requirements.txt`, and this README to the GitHub repository, t
 
 ## Privacy
 Do not put private/sensitive material into AI Horde prompts; AI Horde documentation notes that worker operators may technically be able to see prompts/generations. Treat requests as public-forum-like.
+
+
+### v3 reliability changes
+- Requests a JSON response from the free AI Horde OpenAI-compatible proxy.
+- Raises the text token ceiling to reduce truncated JSON.
+- Uses balanced-brace JSON extraction as a fallback.

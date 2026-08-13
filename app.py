@@ -72,7 +72,8 @@ def horde_text(prompt, max_wait=300):
             {'role': 'user', 'content': prompt},
         ],
         'temperature': 0.25,
-        'max_tokens': 1800,
+        'max_tokens': 5000,
+        'response_format': {'type': 'json_object'},
     }
     r = requests.post(
         HORDE_OAI + '/chat/completions',
@@ -179,16 +180,34 @@ def wiki_extract(title):
 
 
 def extract_json(text):
-    text = text.strip()
-    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = (text or '').strip()
+    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.I)
     text = re.sub(r'\s*```$', '', text)
+    # First try the complete response.
     try:
         return json.loads(text)
-    except Exception:
-        m = re.search(r'\{.*\}', text, flags=re.S)
-        if not m:
-            raise
-        return json.loads(m.group(0))
+    except json.JSONDecodeError as first_error:
+        # Then try the largest balanced JSON object, ignoring braces inside strings.
+        start = text.find('{')
+        if start < 0:
+            raise first_error
+        depth = 0; in_str = False; esc = False; end = None
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc: esc = False
+                elif ch == '\\': esc = True
+                elif ch == '"': in_str = False
+            else:
+                if ch == '"': in_str = True
+                elif ch == '{': depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1; break
+        if end:
+            return json.loads(text[start:end])
+        raise first_error
 
 
 def call_agent(prompt, attempts=3):
@@ -228,7 +247,7 @@ Do not treat Wikipedia as perfect authority. Mark claims requiring stronger veri
 
 Return JSON with:
 topic, one_sentence_summary, historical_context, why_it_matters, timeline(list of date,event,significance), key_people, key_locations, verified_facts, partially_verified_claims, disputed_claims, common_myths(list of myth,historical_evidence), references, confidence_score.
-Only classify a claim as VERIFIED when the supplied evidence is sufficient. Use English for the research package.'''
+Only classify a claim as VERIFIED when the supplied evidence is sufficient. Use English for the research package. Return compact valid JSON with no markdown fences and do not truncate any string.'''
     return extract_json(call_agent(prompt))
 
 
@@ -247,7 +266,7 @@ Rules:
 APPROVED RESEARCH:
 {json.dumps(kb, ensure_ascii=False, indent=2)}
 
-Return JSON:
+Return compact valid JSON with no markdown fences:
 {{"title":"English title","hook_telugu":"","setup_telugu":"","beat1_telugu":"","beat2_telugu":"","beat3_telugu":"","resolution_telugu":"","outro_telugu":"","voiceover_telugu":""}}'''
     return extract_json(call_agent(prompt))
 
@@ -261,7 +280,7 @@ RESEARCH:
 STORY:
 {json.dumps(story, ensure_ascii=False, indent=2)}
 
-Return JSON with:
+Return compact valid JSON with no markdown fences, with:
 characters, locations, costume_rules, environment_rules, timeline_rules, cinematic_rules.
 For uncertain historical appearance, say "historically plausible representation" rather than inventing a claimed portrait.'''
     return extract_json(call_agent(prompt))
@@ -288,7 +307,7 @@ Rules:
 - Every recurring character/location must inherit the Visual Bible.
 - No new facts.
 
-Return JSON: {{"scenes":[{{"image_number":1,"start":0,"end":4,"duration":4,"voiceover_segment":"","visual_purpose":"","visual_description":"","characters":"","costume":"","location":"","period":"","camera":"","lighting":"","environment":"","image_prompt":"","motion_suggestion":"","sfx":"","music":"","onscreen_text":""}}]}}'''
+Return compact valid JSON with no markdown fences: {{"scenes":[{{"image_number":1,"start":0,"end":4,"duration":4,"voiceover_segment":"","visual_purpose":"","visual_description":"","characters":"","costume":"","location":"","period":"","camera":"","lighting":"","environment":"","image_prompt":"","motion_suggestion":"","sfx":"","music":"","onscreen_text":""}}]}}'''
     return extract_json(call_agent(prompt))['scenes']
 
 
