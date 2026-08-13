@@ -88,20 +88,46 @@ def horde_image(prompt, out_file, max_wait=600):
     raise TimeoutError('Free image generation queue took too long. Retry this image.')
 
 
+WIKI_HEADERS = {
+    "User-Agent": "IndianHistoryReelStudio/1.1 (educational history reel app; contact: local-user)",
+    "Accept": "application/json",
+}
+
+
+def wiki_get(url, params, attempts=4, timeout=30):
+    last = None
+    for attempt in range(attempts):
+        try:
+            r = requests.get(url, params=params, headers=WIKI_HEADERS, timeout=timeout)
+            if r.status_code in (429, 500, 502, 503, 504):
+                retry_after = r.headers.get("Retry-After")
+                delay = float(retry_after) if retry_after and retry_after.replace('.', '', 1).isdigit() else min(2 ** attempt, 12)
+                time.sleep(delay)
+                continue
+            r.raise_for_status()
+            return r
+        except requests.RequestException as e:
+            last = e
+            if attempt < attempts - 1:
+                time.sleep(min(2 ** attempt, 8))
+    raise last or RuntimeError("Wikipedia request failed")
+
+
 def wiki_search(topic):
     url = 'https://en.wikipedia.org/w/api.php'
     params = {'action':'query','list':'search','srsearch':topic,'srlimit':5,'format':'json','utf8':1}
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    return [x['title'] for x in r.json()['query']['search']]
+    r = wiki_get(url, params)
+    data = r.json()
+    return [x['title'] for x in data.get('query', {}).get('search', [])]
 
 
 def wiki_extract(title):
     url = 'https://en.wikipedia.org/w/api.php'
     params = {'action':'query','prop':'extracts|info','explaintext':1,'inprop':'url','titles':title,'format':'json','redirects':1}
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    pages = r.json()['query']['pages']
+    r = wiki_get(url, params)
+    pages = r.json().get('query', {}).get('pages', {})
+    if not pages:
+        return {'title':title,'extract':'','url':''}
     p = next(iter(pages.values()))
     return {'title':p.get('title',title),'extract':p.get('extract',''),'url':p.get('fullurl','')}
 
@@ -130,11 +156,21 @@ def call_agent(prompt, attempts=2):
 
 
 def research(topic, supplied_sources):
-    titles = wiki_search(topic)
-    sources = [wiki_extract(t) for t in titles[:5]]
-    evidence = '\n\n'.join(f"SOURCE: {s['title']}\nURL: {s['url']}\n{s['extract'][:7000]}" for s in sources)
+    sources = []
+    research_warning = ''
+    try:
+        titles = wiki_search(topic)
+        sources = [wiki_extract(t) for t in titles[:5]]
+    except Exception as e:
+        research_warning = f"Public Wikipedia retrieval failed temporarily: {type(e).__name__}. Do not treat this as evidence. Use user-supplied sources if available and clearly mark confidence lower."
+
+    evidence = '\n\n'.join(f"SOURCE: {s['title']}\nURL: {s['url']}\n{s['extract'][:7000]}" for s in sources if s.get('extract'))
+    if research_warning:
+        evidence += '\n\nRESEARCH WARNING:\n' + research_warning
     if supplied_sources.strip():
         evidence += '\n\nUSER-SUPPLIED SOURCES/EVIDENCE:\n' + supplied_sources[:16000]
+    if not evidence.strip():
+        evidence = 'No public-source evidence was retrieved. Do not invent facts. Return an evidence-limited research package and mark confidence appropriately.'
     prompt = f'''Conduct a careful historical research pass for: {topic}
 
 Public-source evidence retrieved from Wikipedia/Wikimedia API and any user-supplied source text is below.
